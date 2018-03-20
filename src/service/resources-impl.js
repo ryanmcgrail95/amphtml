@@ -188,9 +188,6 @@ export class Resources {
     */
     this.requestsChangeSize_ = [];
 
-    /** @private {!Array<!Function>} */
-    this.deferredMutates_ = [];
-
     /** @private {?Array<!Resource>} */
     this.pendingBuildResources_ = [];
 
@@ -814,18 +811,18 @@ export class Resources {
    * Updates the priority of the resource. If there are tasks currently
    * scheduled, their priority is updated as well.
    * @param {!Element} element
-   * @param {number} newPriority
+   * @param {number} newLayoutPriority
    * @restricted
    */
-  updatePriority(element, newPriority) {
+  updateLayoutPriority(element, newLayoutPriority) {
     const resource = Resource.forElement(element);
 
-    resource.updatePriority(newPriority);
+    resource.updateLayoutPriority(newLayoutPriority);
 
     // Update affected tasks
     this.queue_.forEach(task => {
       if (task.resource == resource) {
-        task.priority = newPriority;
+        task.priority = newLayoutPriority;
       }
     });
 
@@ -891,16 +888,6 @@ export class Resources {
             }
           });
     });
-  }
-
-  /**
-   * Requests mutate callback to executed at the earliest possibility.
-   * @param {!Element} element
-   * @param {!Function} callback
-   */
-  deferMutate(element, callback) {
-    this.scheduleDeferredMutate_(Resource.forElement(element), callback);
-    this.schedulePassVsync();
   }
 
   /**
@@ -1065,11 +1052,13 @@ export class Resources {
     if (firstPassAfterDocumentReady) {
       this.firstPassAfterDocumentReady_ = false;
       const doc = this.win.document;
+      const documentInfo = Services.documentInfoForDoc(this.ampdoc);
       this.viewer_.sendMessage('documentLoaded', dict({
         'title': doc.title,
         'sourceUrl': getSourceUrl(this.ampdoc.getUrl()),
         'serverLayout': doc.documentElement.hasAttribute('i-amphtml-element'),
-        'linkRels': Services.documentInfoForDoc(this.ampdoc).linkRels,
+        'linkRels': documentInfo.linkRels,
+        'metaTags': documentInfo.metaTags,
       }), /* cancelUnsent */true);
 
       this.contentHeight_ = this.viewport_.getContentHeight();
@@ -1119,8 +1108,7 @@ export class Resources {
    * @private
    */
   hasMutateWork_() {
-    return (this.deferredMutates_.length > 0 ||
-        this.requestsChangeSize_.length > 0);
+    return (this.requestsChangeSize_.length > 0);
   }
 
   /**
@@ -1159,16 +1147,6 @@ export class Resources {
     const isScrollingStopped = (Math.abs(this.lastVelocity_) < 1e-2 &&
         now - this.lastScrollTime_ > MUTATE_DEFER_DELAY_ ||
         now - this.lastScrollTime_ > MUTATE_DEFER_DELAY_ * 2);
-
-    if (this.deferredMutates_.length > 0) {
-      dev().fine(TAG_, 'deferred mutates:', this.deferredMutates_.length);
-      const deferredMutates = this.deferredMutates_;
-      this.deferredMutates_ = [];
-      for (let i = 0; i < deferredMutates.length; i++) {
-        deferredMutates[i]();
-      }
-      this.maybeChangeHeight_ = true;
-    }
 
     // TODO(jridgewell, #12780): Update resize rules to account for layers.
     if (this.requestsChangeSize_.length > 0) {
@@ -1876,16 +1854,6 @@ export class Resources {
   }
 
   /**
-   * Schedules deferred mutate.
-   * @param {!Resource} resource
-   * @param {!Function} callback
-   * @private
-   */
-  scheduleDeferredMutate_(resource, callback) {
-    this.deferredMutates_.push(callback);
-  }
-
-  /**
    * Returns whether the resource should be preloaded at this time.
    * The element must be measured by this time.
    * @param {!Resource} resource
@@ -1967,11 +1935,11 @@ export class Resources {
       if (resource.getState() == ResourceState.NOT_BUILT) {
         resource.whenBuilt().then(() => {
           this.measureAndScheduleIfAllowed_(resource, layout,
-              parentResource.getPriority());
+              parentResource.getLayoutPriority());
         });
       } else {
         this.measureAndScheduleIfAllowed_(resource, layout,
-            parentResource.getPriority());
+            parentResource.getLayoutPriority());
       }
     });
   }
@@ -2012,7 +1980,7 @@ export class Resources {
     const task = {
       id: taskId,
       resource,
-      priority: Math.max(resource.getPriority(), parentPriority) +
+      priority: Math.max(resource.getLayoutPriority(), parentPriority) +
           priorityOffset,
       forceOutsideViewport,
       callback,
